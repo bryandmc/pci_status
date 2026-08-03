@@ -1,0 +1,11 @@
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+erl_crash.dump
+*.ez
+pci_status-*.tar
+/tmp/
+.elixir_ls/
+.elixir-tools/
