@@ -9,9 +9,9 @@ defmodule PCIStatus.Config do
       config :pci_status,
         url: "https://pacific-coast-insights.com/api/status",
         token: {:system, "PCI_STATUS_TOKEN"},
-        otp_app: :ptp,
-        service: "ptp-backend",
-        repo: Ptp.Repo,
+        otp_app: :my_app,
+        service: "my-app-backend",
+        repo: MyApp.Repo,
         interval: :timer.seconds(60)
 
   The agent is a no-op unless both a `:url` and a `:token` resolve, so an app
