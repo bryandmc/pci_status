@@ -37,7 +37,15 @@ defmodule PCIStatus.Reporter do
   @initial_delay :timer.seconds(5)
   @jitter_pct 10
 
-  defstruct [:interval, :backoff, :last_result, :last_reported_at, :warned_unauthorized]
+  defstruct [
+    :interval,
+    :backoff,
+    :last_result,
+    :last_reported_at,
+    :warned_unauthorized,
+    :last_payload,
+    :last_collected_at
+  ]
 
   # --- API ---
 
@@ -56,6 +64,25 @@ defmodule PCIStatus.Reporter do
   @doc "Last delivery outcome and when it happened, without triggering a report."
   def last_result(server \\ __MODULE__) do
     GenServer.call(server, :last_result)
+  end
+
+  @doc """
+  The most recently *collected* payload and its age in seconds, or `nil` if no
+  collection has completed yet.
+
+  This is what `PCIStatus.Plug` serves for readiness. Collection is already
+  happening on the tick, so reading it costs nothing — which is the point: an
+  HTTP request must never be able to trigger a dependency check, or an
+  unauthenticated caller can drive database load at will.
+
+  Note this reflects the last successful *collection*, not the last successful
+  *delivery*. An unreachable portal must not make an otherwise-healthy app
+  report itself unready.
+  """
+  def last_snapshot(server \\ __MODULE__, timeout \\ 5_000) do
+    GenServer.call(server, :last_snapshot, timeout)
+  catch
+    :exit, _ -> nil
   end
 
   # --- Callbacks ---
@@ -110,30 +137,61 @@ defmodule PCIStatus.Reporter do
     {:reply, %{result: state.last_result, at: state.last_reported_at}, state}
   end
 
+  def handle_call(:last_snapshot, _from, %{last_payload: nil} = state) do
+    {:reply, nil, state}
+  end
+
+  def handle_call(:last_snapshot, _from, state) do
+    age = DateTime.diff(DateTime.utc_now(), state.last_collected_at, :second)
+    {:reply, %{payload: state.last_payload, age_seconds: age}, state}
+  end
+
   # --- Reporting ---
 
   defp do_report(state) do
     started = System.monotonic_time(:millisecond)
     timeout = Config.timeout() + Config.check_timeout() + 2_000
 
-    result =
+    {payload, result} =
       case run_with_timeout(&collect_and_send/0, timeout) do
-        {:ok, result} -> result
-        {:error, :timeout} -> {:error, "report timed out after #{timeout}ms"}
+        {:ok, {payload, result}} -> {payload, result}
+        {:crashed, reason} -> {nil, {:error, "crashed: #{inspect(reason)}"}}
+        {:error, :timeout} -> {nil, {:error, "report timed out after #{timeout}ms"}}
       end
 
     duration = System.monotonic_time(:millisecond) - started
     emit_telemetry(result, duration)
 
     state
+    |> cache_payload(payload)
     |> Map.put(:last_result, result)
     |> Map.put(:last_reported_at, DateTime.utc_now())
     |> apply_backoff(result)
   end
 
+  # A tick that died before collection finished keeps the previous snapshot
+  # rather than blanking it. Stale-but-known beats nothing, and the plug
+  # publishes the age so a consumer can decide for itself whether to trust it.
+  defp cache_payload(state, nil), do: state
+
+  defp cache_payload(state, payload),
+    do: %{state | last_payload: payload, last_collected_at: DateTime.utc_now()}
+
+  # Returns `{payload, delivery_result}`. The payload is kept even when delivery
+  # fails: an unreachable portal says nothing about whether this app's own
+  # dependencies are healthy, and readiness is served from this snapshot.
   defp collect_and_send do
     payload = Collector.collect()
+    {payload, send_payload(payload)}
+  rescue
+    # Only reachable when Collector.collect/0 itself raised — send_payload has
+    # its own rescue — so there is genuinely no payload to keep.
+    e -> {nil, {:error, Exception.message(e)}}
+  catch
+    kind, reason -> {nil, {:error, "#{kind}: #{inspect(reason)}"}}
+  end
 
+  defp send_payload(payload) do
     Req.post(Config.url(),
       json: payload,
       headers: [
@@ -173,7 +231,7 @@ defmodule PCIStatus.Reporter do
 
     case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> {:ok, result}
-      {:exit, reason} -> {:ok, {:error, "crashed: #{inspect(reason)}"}}
+      {:exit, reason} -> {:crashed, reason}
       nil -> {:error, :timeout}
     end
   end
