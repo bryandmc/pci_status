@@ -70,10 +70,15 @@ defmodule PCIStatus.Reporter do
   The most recently *collected* payload and its age in seconds, or `nil` if no
   collection has completed yet.
 
-  This is what `PCIStatus.Plug` serves for readiness. Collection is already
-  happening on the tick, so reading it costs nothing — which is the point: an
-  HTTP request must never be able to trigger a dependency check, or an
-  unauthenticated caller can drive database load at will.
+  Nothing in this library serves it any more — `PCIStatus.Plug` used to, for a
+  `/health/ready` that has since been removed (see that module for why). It is
+  kept because it is the right primitive for an app that wants a readiness
+  answer of its own: collection is already happening on the tick, so reading it
+  costs nothing, and an HTTP request must never be able to trigger a dependency
+  check or an unauthenticated caller can drive database load at will.
+
+  If you do build one on this, answer a status code and an empty body. The
+  payload carries every check's `detail`, which is why the one here is gone.
 
   Note this reflects the last successful *collection*, not the last successful
   *delivery*. An unreachable portal must not make an otherwise-healthy app
@@ -179,7 +184,7 @@ defmodule PCIStatus.Reporter do
 
   # Returns `{payload, delivery_result}`. The payload is kept even when delivery
   # fails: an unreachable portal says nothing about whether this app's own
-  # dependencies are healthy, and readiness is served from this snapshot.
+  # dependencies are healthy, and `last_snapshot/2` is the only way to ask.
   defp collect_and_send do
     payload = Collector.collect()
     {payload, send_payload(payload)}

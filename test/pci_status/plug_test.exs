@@ -72,52 +72,24 @@ defmodule PCIStatus.PlugTest do
     end
   end
 
-  describe "/health/ready" do
-    test "reports unknown, not healthy, before anything has been collected" do
-      # No reporter registered at all — last_snapshot/2 catches the exit.
+  describe "/health/ready, which is gone" do
+    test "is a 404, like any path that was never mounted" do
+      # It served the cached snapshot with the whole `checks` map, and
+      # `Checks.normalize/1` merges each check's `detail` into its entry — so an
+      # endpoint with no token in front of it answered with whatever the host's
+      # checks happened to carry. In one consuming app that was the mail sender
+      # address, the count of bouncing customers, how much money was stuck
+      # unrefunded, and how long ago the last payment landed.
       conn = call("/ready")
 
-      assert conn.status == 503
-      assert body(conn)["status"] == "unknown"
-      assert checks_run() == 0
+      assert conn.status == 404
+      assert body(conn)["error"] == "not found"
     end
 
-    test "serves the cached snapshot without running a single check" do
+    test "and it takes nothing with it — it runs no checks either" do
       snapshot(%{"database" => %{status: "up"}}, 5)
 
-      conn = call("/ready")
-
-      assert conn.status == 200
-      assert body(conn)["status"] == "up"
-      assert body(conn)["age_seconds"] == 5
-      assert checks_run() == 0
-    end
-
-    test "503s on a down dependency, still without running checks" do
-      snapshot(%{"database" => %{status: "down"}, "disk" => %{status: "up"}}, 5)
-
-      conn = call("/ready")
-
-      assert conn.status == 503
-      assert body(conn)["status"] == "down"
-      assert checks_run() == 0
-    end
-
-    test "degraded is surfaced as 503" do
-      snapshot(%{"oban" => %{status: "degraded"}}, 5)
-
-      assert call("/ready").status == 503
-      assert body(call("/ready"))["status"] == "degraded"
-    end
-
-    test "a snapshot older than three intervals reads as stale, not healthy" do
-      # Default interval is 60s, so the floor of 120s applies at 180s.
-      snapshot(%{"database" => %{status: "up"}}, 10_000)
-
-      conn = call("/ready")
-
-      assert conn.status == 503
-      assert body(conn)["status"] == "stale"
+      assert call("/ready").status == 404
       assert checks_run() == 0
     end
   end

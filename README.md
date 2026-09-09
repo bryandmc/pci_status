@@ -70,14 +70,26 @@ forward "/health", PCIStatus.Plug
 | Path | Cost | Meaning |
 |---|---|---|
 | `/health` | free | The VM is up and serving. Always 200 |
-| `/health/ready` | cheap | Runs the checks. 200 if all up, 503 otherwise |
 | `/health/full` | full | The entire payload as JSON. Requires the bearer token |
 
-The split is load-bearing. `/health` is what the portal's poller and any load
-balancer should hit, and it must not touch the database — otherwise one slow
-query marks every instance unhealthy and cycles the fleet. Dependency checking
-belongs behind `/ready`, where a failure means "stop sending me traffic", not
-"restart me".
+`/health` is what the portal's poller and any load balancer should hit, and it
+must not touch the database — otherwise one slow query marks every instance
+unhealthy and cycles the fleet. It answers a status code and the service name,
+and deliberately nothing else: no version, no git SHA, nothing that tells an
+anonymous caller which commit is running.
+
+Everything else is behind the bearer token at `/full`.
+
+There used to be a `/health/ready` serving the reporter's cached snapshot. It
+answered with the whole `checks` map, and `PCIStatus.Checks.normalize/1` merges
+each check's `detail` into its entry — so an unauthenticated endpoint returned
+whatever the host's checks happened to carry. Free disk and free RAM from the
+built-ins; in one consuming app, also the mail sender address, the number of
+bouncing customer addresses, how much money was stuck unrefunded, and how long
+ago the last payment landed.
+
+If you want a readiness probe back, it should answer a status code and an empty
+body. It is gone rather than trimmed because nothing was calling it.
 
 ## Checks
 
